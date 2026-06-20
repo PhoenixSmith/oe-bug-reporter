@@ -1,0 +1,8 @@
+name = "oe-bug-reporter"
+main = "worker.js"
+compatibility_date = "2024-09-23"
+
+[vars]
+# No secrets here -- set LINEAR_API_KEY and GITHUB_TOKEN via `wrangler secret put`
+LINEAR_TEAM_ID = "296eb9e7-4dab-4744-9e05-b56a5888a20b"
+LINEAR_BUG_LABEL_ID = "cd717ce7-fe84-4eea-9385-1acd11d9e224"
