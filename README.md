@@ -1,6 +1,6 @@
 # Orbit Economica Bug Reporter
 
-Cloudflare Worker API for in-game bug reporting. Players file bugs from the OER PauseMenu modal, which POSTs directly to this worker. The worker creates Linear issues with attachments.
+Cloudflare Worker API for in-game bug reporting. Players file bugs from the OER PauseMenu modal, which POSTs directly to this worker. The worker creates Linear issues with attachments. It also exposes authenticated admin endpoints for triage, so the backend is operational without giving Linear credentials to the client.
 
 ## Architecture
 
@@ -17,11 +17,22 @@ OER PauseMenu (BugReportModal)
 
 - `LINEAR_API_KEY` — Linear API key for creating issues and attachments
 - `GITHUB_TOKEN` — GitHub PAT with gist scope for hosting save game files
+- `ADMIN_TOKEN` — optional dedicated bearer token for admin triage endpoints. Until set, the existing `LINEAR_API_KEY` also works as a break-glass admin credential.
 
 ## Vars (in wrangler.toml)
 
 - `LINEAR_TEAM_ID` — Orbit Economica team in Linear
 - `LINEAR_BUG_LABEL_ID` — "Bug" label ID
+
+## Admin API
+
+All admin routes require `Authorization: Bearer <ADMIN_TOKEN>`:
+
+- `GET /admin/health` — backend/secret readiness without exposing secret values
+- `GET /admin/issues?limit=25` — list bug-labelled Linear issues, newest updates first
+- `PATCH /admin/issues/:identifier` — update `title`, `description`, `priority`, `stateId`, or `assigneeId`
+
+`OPTIONS` allows the `Authorization` header for browser-based admin tooling. The public client never receives or uses this credential.
 
 ## Deployment
 

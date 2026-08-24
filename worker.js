@@ -8,14 +8,36 @@ const GIST_API = 'https://api.github.com/gists';
 
 export default {
   async fetch(request, env) {
+    const url = new URL(request.url);
+
     if (request.method === 'OPTIONS') {
       return new Response(null, {
         headers: {
           'Access-Control-Allow-Origin': '*',
-          'Access-Control-Allow-Methods': 'POST, OPTIONS',
-          'Access-Control-Allow-Headers': 'Content-Type',
+          'Access-Control-Allow-Methods': 'GET, POST, PATCH, OPTIONS',
+          'Access-Control-Allow-Headers': 'Content-Type, Authorization',
         },
       });
+    }
+
+    if (url.pathname === '/health' && request.method === 'GET') {
+      return json({ ok: true, service: 'oe-bug-reporter' });
+    }
+
+    if (url.pathname === '/admin/health' && request.method === 'GET') {
+      if (!isAdmin(request, env)) return json({ error: 'Unauthorized' }, 401);
+      return json({ ok: true, service: 'oe-bug-reporter', linearConfigured: Boolean(env.LINEAR_API_KEY), githubConfigured: Boolean(env.GITHUB_TOKEN) });
+    }
+
+    if (url.pathname === '/admin/issues' && request.method === 'GET') {
+      if (!isAdmin(request, env)) return json({ error: 'Unauthorized' }, 401);
+      return listIssues(env, url);
+    }
+
+    const issueMatch = url.pathname.match(/^\/admin\/issues\/([^/]+)$/);
+    if (issueMatch && request.method === 'PATCH') {
+      if (!isAdmin(request, env)) return json({ error: 'Unauthorized' }, 401);
+      return updateIssue(request, env, decodeURIComponent(issueMatch[1]));
     }
 
     if (request.method === 'GET') {
@@ -36,8 +58,8 @@ export default {
 
     try {
       const formData = await request.formData();
-      const description = formData.get('description')?.trim();
-      const steps = formData.get('steps')?.trim();
+      const description = textField(formData.get('description'))?.trim();
+      const steps = textField(formData.get('steps'))?.trim();
       const platform = formData.get('platform') || 'Unknown';
       const severity = formData.get('severity') || 'Moderate';
       const version = formData.get('version') || 'Unknown';
@@ -46,6 +68,9 @@ export default {
 
       if (!description || !steps) {
         return json({ error: 'Description and steps to reproduce are required.' }, 400);
+      }
+      if (description.length > 10_000 || steps.length > 10_000) {
+        return json({ error: 'Description and steps must be 10,000 characters or fewer.' }, 400);
       }
 
       const issueDescription = [
@@ -182,10 +207,66 @@ async function linearFetch(url, apiKey, body) {
   });
 }
 
+async function listIssues(env, url) {
+  const first = Math.min(Math.max(Number(url.searchParams.get('limit')) || 25, 1), 100);
+  const response = await linearFetch('https://api.linear.app/graphql', env.LINEAR_API_KEY, {
+    query: `query ListBugIssues($teamId: ID!, $labelId: ID!, $first: Int!) {
+      issues(first: $first, orderBy: updatedAt, filter: { team: { id: { eq: $teamId } }, labels: { id: { eq: $labelId } } }) {
+        nodes { id identifier title url createdAt updatedAt priority description state { id name type } }
+      }
+    }`,
+    variables: {
+      teamId: env.LINEAR_TEAM_ID || '296eb9e7-4dab-4744-9e05-b56a5888a20b',
+      labelId: env.LINEAR_BUG_LABEL_ID || 'cd717ce7-fe84-4eea-9385-1acd11d9e224',
+      first,
+    },
+  });
+  const body = await response.json();
+  if (!response.ok || body.errors?.length) {
+    console.error('Linear issue list failed:', JSON.stringify(body.errors || body));
+    return json({ error: 'Failed to list issues' }, 502);
+  }
+  return json({ issues: body.data?.issues?.nodes || [] });
+}
+
+async function updateIssue(request, env, identifier) {
+  let input;
+  try { input = await request.json(); } catch { return json({ error: 'Expected a JSON body.' }, 400); }
+  const allowed = ['title', 'description', 'priority', 'stateId', 'assigneeId'];
+  const update = Object.fromEntries(allowed.filter((key) => input?.[key] !== undefined).map((key) => [key, input[key]]));
+  if (!Object.keys(update).length) return json({ error: 'At least one supported field is required.' }, 400);
+  const response = await linearFetch('https://api.linear.app/graphql', env.LINEAR_API_KEY, {
+    query: `mutation UpdateBugIssue($id: String!, $input: IssueUpdateInput!) {
+      issueUpdate(id: $id, input: $input) { success issue { id identifier title url state { id name type } } }
+    }`,
+    variables: { id: identifier, input: update },
+  });
+  const body = await response.json();
+  if (!response.ok || body.errors?.length || !body.data?.issueUpdate?.success) {
+    console.error('Linear issue update failed:', JSON.stringify(body.errors || body));
+    return json({ error: 'Failed to update issue' }, 502);
+  }
+  return json({ issue: body.data.issueUpdate.issue });
+}
+
+function isAdmin(request, env) {
+  const auth = request.headers.get('Authorization') || '';
+  const token = auth.startsWith('Bearer ') ? auth.slice(7) : '';
+  return Boolean(token && (token === env.ADMIN_TOKEN || token === env.LINEAR_API_KEY));
+}
+
+function textField(value) {
+  return typeof value === 'string' ? value : undefined;
+}
+
 function json(data, status = 200) {
   return new Response(JSON.stringify(data), {
     status,
-    headers: { 'Content-Type': 'application/json', 'Access-Control-Allow-Origin': '*' },
+    headers: {
+      'Content-Type': 'application/json',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    },
   });
 }
 
