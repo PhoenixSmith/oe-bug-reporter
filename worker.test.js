@@ -60,6 +60,79 @@ test('admin issue list proxies the bug-labelled Linear query', async (t) => {
   assert.deepEqual(await response.json(), { issues: [{ identifier: 'ORB-1' }] });
 });
 
+test('crash report POST attaches logs and is tagged Desktop Crash Reporter', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+
+  const logContent = '2026-09-01T00:00:00Z [main/warn] renderer crashed\n';
+  const calls = { gistContent: null, createBody: null };
+  globalThis.fetch = async (url, init) => {
+    const body = JSON.parse(init.body);
+    if (String(url).includes('api.github.com/gists')) {
+      calls.gistContent = body.files['crash.log'].content;
+      return new Response(JSON.stringify({ files: { 'crash.log': { raw_url: 'https://gist.example/raw/crash.log' } } }), { status: 200 });
+    }
+    if (String(url).includes('api.linear.app')) {
+      if (body.query.includes('issueCreate')) {
+        calls.createBody = body;
+        return new Response(JSON.stringify({ data: { issueCreate: { issue: { id: 'iss-id', identifier: 'ORB-LOG', url: 'https://linear.example/ORB-LOG' } } } }), { status: 200 });
+      }
+      if (body.query.includes('attachmentCreate')) {
+        return new Response(JSON.stringify({ data: { attachmentCreate: { attachment: { id: 'att-id', url: 'https://linear.example/att' } } } }), { status: 200 });
+      }
+      return new Response(JSON.stringify({ data: {} }), { status: 200 });
+    }
+    throw new Error('unexpected fetch: ' + url);
+  };
+
+  const form = new FormData();
+  form.append('description', 'renderer crashed during galaxy load');
+  form.append('steps', '1. launch the game');
+  form.append('severity', 'Crash');
+  form.append('logs', new Blob([logContent]), 'crash.log');
+
+  const env = { ...baseEnv, GITHUB_TOKEN: 'github-test-token' };
+  const response = await worker.fetch(request('/', { method: 'POST', body: form }), env);
+  assert.equal(response.status, 200);
+  assert.deepEqual(await response.json(), {
+    success: true,
+    issue: { id: 'ORB-LOG', url: 'https://linear.example/ORB-LOG' },
+    attachmentStatus: 'none',
+  });
+
+  const description = calls.createBody.variables.input.description;
+  assert.match(description, /\*\*Logs:\*\* Attached/);
+  assert.match(description, /\*\*Reported via:\*\* Desktop Crash Reporter/);
+  assert.doesNotMatch(description, /\*\*Logs:\*\* Not attached/);
+  // The crash log body is what actually hit the GitHub Gist upload.
+  assert.equal(calls.gistContent, logContent);
+});
+
+test('in-game bug report without logs is tagged In-Game Bug Reporter', async (t) => {
+  const originalFetch = globalThis.fetch;
+  t.after(() => { globalThis.fetch = originalFetch; });
+
+  let createBody = null;
+  globalThis.fetch = async (url, init) => {
+    const body = JSON.parse(init.body);
+    if (String(url).includes('api.linear.app') && body.query.includes('issueCreate')) {
+      createBody = body;
+      return new Response(JSON.stringify({ data: { issueCreate: { issue: { id: 'iss-id', identifier: 'ORB-ING', url: 'https://linear.example/ORB-ING' } } } }), { status: 200 });
+    }
+    throw new Error('unexpected fetch: ' + url);
+  };
+
+  const form = new FormData();
+  form.append('description', 'guild ledger shows odd totals');
+  form.append('steps', 'open the ledger');
+  const response = await worker.fetch(request('/', { method: 'POST', body: form }), baseEnv);
+  assert.equal(response.status, 200);
+
+  const description = createBody.variables.input.description;
+  assert.match(description, /\*\*Logs:\*\* Not attached/);
+  assert.match(description, /\*\*Reported via:\*\* In-Game Bug Reporter/);
+});
+
 test('admin issue update proxies only supported fields', async (t) => {
   const originalFetch = globalThis.fetch;
   t.after(() => { globalThis.fetch = originalFetch; });

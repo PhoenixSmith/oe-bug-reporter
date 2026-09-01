@@ -41,7 +41,7 @@ export default {
     }
 
     if (request.method === 'GET') {
-      return json({ message: 'OE Bug Reporter API. POST bug reports here.', usage: 'POST with FormData: description, steps, severity, version, platform, screenshot?, saveGame?' }, 200);
+      return json({ message: 'OE Bug Reporter API. POST bug reports here.', usage: 'POST with FormData: description, steps, severity, version, platform, screenshot?, saveGame?, logs?' }, 200);
     }
 
     if (request.method !== 'POST') {
@@ -65,6 +65,7 @@ export default {
       const version = formData.get('version') || 'Unknown';
       const screenshot = formData.get('screenshot');
       const saveGame = formData.get('saveGame');
+      const logs = formData.get('logs');
 
       if (!description || !steps) {
         return json({ error: 'Description and steps to reproduce are required.' }, 400);
@@ -80,7 +81,8 @@ export default {
         `**Severity:** ${severity}`,
         `**Version:** ${version}`,
         saveGame instanceof File ? `**Save game:** Attached` : `**Save game:** Not attached`,
-        `**Reported via:** In-Game Bug Reporter`,
+        logs instanceof File ? `**Logs:** Attached` : `**Logs:** Not attached`,
+        `**Reported via:** ${logs instanceof File ? 'Desktop Crash Reporter' : 'In-Game Bug Reporter'}`,
       ].join('\n');
 
       const issueRes = await linearFetch('https://api.linear.app/graphql', apiKey, {
@@ -118,6 +120,14 @@ export default {
         } catch (uploadErr) {
           attachmentStatus = `failed: ${uploadErr.message}`;
           console.error('Save game upload failed:', attachmentStatus);
+        }
+      }
+
+      if (logs && logs instanceof File && logs.size > 0) {
+        try {
+          await uploadFileAsAttachment(apiKey, env.GITHUB_TOKEN, issue.id, issue.identifier, logs, 'Crash Logs');
+        } catch (uploadErr) {
+          console.error('Log upload failed (non-fatal):', uploadErr.message);
         }
       }
 

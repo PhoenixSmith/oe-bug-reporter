@@ -5,11 +5,11 @@ Cloudflare Worker API for in-game bug reporting. Players file bugs from the OER 
 ## Architecture
 
 ```
-OER PauseMenu (BugReportModal)
-  → POST FormData (description, steps, severity, version, platform, saveGame?)
+OER PauseMenu / desktop crash page
+  → POST FormData (description, steps, severity, version, platform, saveGame?, logs?)
     → Cloudflare Worker (this repo, deployed via wrangler)
       → Linear GraphQL API (create issue)
-      → GitHub Gist API (host save game / screenshot)
+      → GitHub Gist API (host save game / screenshot / crash logs)
       → Linear GraphQL API (attach gist URL)
 ```
 
